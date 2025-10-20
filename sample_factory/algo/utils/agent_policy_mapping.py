@@ -27,6 +27,10 @@ class AgentPolicyMapping:
             cfg.pbt_mix_policies_in_one_env if hasattr(cfg, "pbt_mix_policies_in_one_env") else False
         )  # TODO
 
+        self.independent_policies_for_each_agent = (
+            cfg.independent_policies_for_each_agent if hasattr(cfg, "independent_policies_for_each_agent") else False
+        )
+
         self.resample_env_policy_every = 10  # episodes
         self.env_policies = dict()
         self.env_policy_requests = dict()
@@ -37,6 +41,9 @@ class AgentPolicyMapping:
             assert total_envs % self.num_policies == 0, f"{total_envs=} must be divisible by {self.num_policies=}"
 
     def get_policy_for_agent(self, agent_idx: int, env_idx: int, global_env_idx: int) -> int:
+        if self.independent_policies_for_each_agent:
+            return agent_idx % self.num_policies
+
         if self.sync_mode:
             # env_id here is a global index of the policy
             # deterministic mapping ensures we always collect the same amount of experience per policy per iteration
