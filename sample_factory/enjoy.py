@@ -1,6 +1,6 @@
 import time
 from collections import deque
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
@@ -10,10 +10,12 @@ from torch import Tensor
 from sample_factory.algo.learning.learner import Learner
 from sample_factory.algo.sampling.batched_sampling import preprocess_actions
 from sample_factory.algo.utils.action_distributions import argmax_actions
+from sample_factory.algo.utils.agent_policy_mapping import create_agent_policy_mapping
 from sample_factory.algo.utils.env_info import extract_env_info
 from sample_factory.algo.utils.make_env import BatchedVecEnv, make_env_func_batched
 from sample_factory.algo.utils.misc import ExperimentStatus
 from sample_factory.algo.utils.rl_utils import make_dones, prepare_and_normalize_obs
+from sample_factory.algo.utils.tensor_dict import TensorDict
 from sample_factory.algo.utils.tensor_utils import unsqueeze_tensor
 from sample_factory.cfg.arguments import load_from_checkpoint
 from sample_factory.huggingface.huggingface_utils import generate_model_card, generate_replay_video, push_to_hf
@@ -89,8 +91,7 @@ def make_env(cfg: Config, render_mode: Optional[str] = None) -> BatchedVecEnv:
     return env
 
 
-def load_state_dict(cfg: Config, actor_critic: ActorCritic, device: torch.device) -> None:
-    policy_id = cfg.policy_index
+def load_state_dict(policy_id: int, cfg: Config, actor_critic: ActorCritic, device: torch.device) -> None:
     name_prefix = dict(latest="checkpoint", best="best")[cfg.load_checkpoint_kind]
     checkpoints = Learner.get_checkpoints(Learner.checkpoint_dir(cfg, policy_id), f"{name_prefix}_*")
     checkpoint_dict = Learner.load_checkpoint(checkpoints, device)
@@ -98,6 +99,61 @@ def load_state_dict(cfg: Config, actor_critic: ActorCritic, device: torch.device
         actor_critic.load_state_dict(checkpoint_dict["model"])
     else:
         raise RuntimeError("Could not load checkpoint")
+
+
+def load_policies(cfg, env, device) -> List[ActorCritic]:
+    """
+    Loads the actor-critic policies from the checkpoint.
+    If cfg.agent_policy_mapping is None, loads a single actor-critic policy.
+    Otherwise, loads a list of actor-critic policies of length cfg.num_policies.
+    """
+    actor_critic_list = []
+    num_policies = 1 if cfg.agent_policy_mapping is None else cfg.num_policies
+    actor_critic_list = [create_actor_critic(cfg, env.observation_space, env.action_space) for _ in range(num_policies)]
+
+    for i in range(num_policies):
+        actor_critic_list[i].eval()
+        actor_critic_list[i].model_to_device(device)
+        policy_id = cfg.policy_index if cfg.agent_policy_mapping is None else i
+        load_state_dict(policy_id, cfg, actor_critic_list[i], device)
+
+    return actor_critic_list
+
+
+def make_agent_policy_map(cfg, env_info) -> Optional[List[int]]:
+    """
+    It returns a list of policy indices for each agent specified by the agent_policy_mapping.
+    If cfg.agent_policy_mapping is None, returns None.
+    """
+    agent_policy_map = None
+    if cfg.agent_policy_mapping is not None:
+        policy_mgr = create_agent_policy_mapping(cfg.agent_policy_mapping, cfg, env_info)
+        agent_policy_map = [policy_mgr.get_policy_for_agent(agent_idx, 0, 0) for agent_idx in range(env_info.num_agents)]
+
+    return agent_policy_map
+
+
+def get_policy_outputs(actor_critic_list, agent_policy_map, obs, rnn_states, action_mask):
+    if len(actor_critic_list) == 1:
+        actor_critic = actor_critic_list[0]
+        normalized_obs = prepare_and_normalize_obs(actor_critic, obs)
+        policy_outputs = actor_critic(normalized_obs, rnn_states, action_mask=action_mask)
+    else:
+        outputs_list = []
+        num_agents = len(agent_policy_map)
+        for agent_idx in range(num_agents):
+            agent_obs = {key: value[agent_idx].unsqueeze(0) for key, value in obs.items()}
+            policy_id = agent_policy_map[agent_idx]
+            actor_critic = actor_critic_list[policy_id]
+            normalized_obs = prepare_and_normalize_obs(actor_critic, agent_obs)
+            outputs = actor_critic(normalized_obs, rnn_states[agent_idx].unsqueeze(0), action_mask=action_mask)
+            outputs_list.append(outputs)
+
+        policy_outputs = TensorDict()
+        policy_outputs["actions"] = torch.stack([outputs["actions"] for outputs in outputs_list])
+        policy_outputs["new_rnn_states"] = torch.stack([outputs["new_rnn_states"][0] for outputs in outputs_list])
+
+    return policy_outputs
 
 
 def enjoy(cfg: Config) -> Tuple[StatusCode, float]:
@@ -128,13 +184,9 @@ def enjoy(cfg: Config) -> Tuple[StatusCode, float]:
         # reset call ruins the demo recording for VizDoom
         env.unwrapped.reset_on_init = False
 
-    actor_critic = create_actor_critic(cfg, env.observation_space, env.action_space)
-    actor_critic.eval()
-
     device = torch.device("cpu" if cfg.device == "cpu" else "cuda")
-    actor_critic.model_to_device(device)
-
-    load_state_dict(cfg, actor_critic, device)
+    actor_critic_list = load_policies(cfg, env, device)
+    agent_policy_map = make_agent_policy_map(cfg, env_info)
 
     episode_rewards = [deque([], maxlen=100) for _ in range(env.num_agents)]
     true_objectives = [deque([], maxlen=100) for _ in range(env.num_agents)]
@@ -158,17 +210,16 @@ def enjoy(cfg: Config) -> Tuple[StatusCode, float]:
 
     with torch.no_grad():
         while not max_frames_reached(num_frames):
-            normalized_obs = prepare_and_normalize_obs(actor_critic, obs)
+            policy_outputs = get_policy_outputs(actor_critic_list, agent_policy_map, obs, rnn_states, action_mask)
 
             if not cfg.no_render:
-                visualize_policy_inputs(normalized_obs)
-            policy_outputs = actor_critic(normalized_obs, rnn_states, action_mask=action_mask)
+                visualize_policy_inputs(prepare_and_normalize_obs(actor_critic_list[0], obs))
 
             # sample actions from the distribution by default
             actions = policy_outputs["actions"]
 
             if cfg.eval_deterministic:
-                action_distribution = actor_critic.action_distribution()
+                action_distribution = actor_critic_list[0].action_distribution()
                 actions = argmax_actions(action_distribution)
 
             # actions shape should be [num_agents, num_actions] even if it's [1, 1]

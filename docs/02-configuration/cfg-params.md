@@ -99,7 +99,7 @@ usage: train_gym_env.py [-h] [--algo ALGO] --env ENV [--experiment EXPERIMENT]
                         [--wandb_tags [WANDB_TAGS [WANDB_TAGS ...]]]
                         [--with_pbt WITH_PBT]
                         [--pbt_mix_policies_in_one_env PBT_MIX_POLICIES_IN_ONE_ENV]
-                        [--independent_policies_for_each_agent INDEPENDENT_POLICIES_FOR_EACH_AGENT]
+                        [--agent_policy_mapping AGENT_POLICY_MAPPING]
                         [--pbt_period_env_steps PBT_PERIOD_ENV_STEPS]
                         [--pbt_start_mutation PBT_START_MUTATION]
                         [--pbt_replace_fraction PBT_REPLACE_FRACTION]
@@ -593,13 +593,9 @@ optional arguments:
   --pbt_mix_policies_in_one_env PBT_MIX_POLICIES_IN_ONE_ENV
                         For multi-agent envs, whether we mix different
                         policies in one env. (default: True)
-  --independent_policies_for_each_agent INDEPENDENT_POLICIES_FOR_EACH_AGENT
-                        For multi-agent envs, whether we assign a different
-                        policy to each agent (as known as independent PPO).
-                        When this is True, --pbt_mix_policies_in_one_env is
-                        ignored. If --num_policies is less than the number of
-                        agents, the policies are assigned in a round-robin
-                        manner. (default: False)
+  --agent_policy_mapping AGENT_POLICY_MAPPING
+                        Name of the agent policy mapping to use. If not specified, the default mapping is used.
+                        See sample_factory.algo.utils.agent_policy_mapping for more details. (default: None)
   --pbt_period_env_steps PBT_PERIOD_ENV_STEPS
                         Periodically replace the worst policies with the best
                         ones and perturb the hyperparameters (default:

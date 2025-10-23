@@ -8,7 +8,7 @@ import gymnasium as gym
 import numpy as np
 
 from sample_factory.algo.sampling.sampling_utils import VectorEnvRunner, record_episode_statistics_wrapper_stats
-from sample_factory.algo.utils.agent_policy_mapping import AgentPolicyMapping
+from sample_factory.algo.utils.agent_policy_mapping import create_agent_policy_mapping
 from sample_factory.algo.utils.env_info import EnvInfo, check_env_info
 from sample_factory.algo.utils.make_env import make_env_func_non_batched
 from sample_factory.algo.utils.misc import EPISODIC, POLICY_ID_KEY
@@ -366,7 +366,7 @@ class NonBatchedVectorEnvRunner(VectorEnvRunner):
 
         self.training_info: List[Optional[Dict]] = training_info
 
-        self.policy_mgr = AgentPolicyMapping(self.cfg, self.env_info)
+        self.policy_mgr = create_agent_policy_mapping(self.cfg.agent_policy_mapping, self.cfg, self.env_info)
 
     def init(self, timing: Timing):
         """

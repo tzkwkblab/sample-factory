@@ -25,6 +25,10 @@ ActionSpace = spaces.Space
 
 CreateEnvFunc = Callable[[str, Optional[Config], Optional[AttrDict], Optional[str]], Env]
 
+EnvInfo = Any
+AgentPolicyMapping = Any
+CreateAgentPolicyMappingFunc = Callable[[Optional[Config], Optional[EnvInfo]], AgentPolicyMapping]
+
 # there currenly isn't a single class all distributions derive from, but we gotta use something for the type hint
 ActionDistribution = Any
 

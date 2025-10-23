@@ -762,12 +762,11 @@ def add_pbt_args(p: ArgumentParser):
         help="For multi-agent envs, whether we mix different policies in one env.",
     )
     p.add_argument(
-        "--independent_policies_for_each_agent",
-        default=False,
-        type=str2bool,
-        help="For multi-agent envs, whether we assign a different policy to each agent (as known as independent PPO)."
-        "When this is True, --pbt_mix_policies_in_one_env is ignored."
-        "If --num_policies is less than the number of agents, the policies are assigned in a round-robin manner."
+        "--agent_policy_mapping",
+        default=None,
+        type=str,
+        help="Name of the agent policy mapping to use. If not specified, the default mapping is used. "
+        "See sample_factory.algo.utils.agent_policy_mapping for more details.",
     )
     p.add_argument(
         "--pbt_period_env_steps",

@@ -1,13 +1,14 @@
 from typing import Dict
 
 from sample_factory.model.model_factory import ModelFactory
-from sample_factory.utils.typing import CreateEnvFunc
+from sample_factory.utils.typing import CreateEnvFunc, CreateAgentPolicyMappingFunc
 
 
 class SampleFactoryContext:
     def __init__(self):
         self.env_registry = dict()
         self.model_factory = ModelFactory()
+        self.agent_policy_mapping_registry = dict()
 
 
 GLOBAL_CONTEXT = None
@@ -48,3 +49,11 @@ def global_model_factory() -> ModelFactory:
     :rtype: ModelFactory
     """
     return sf_global_context().model_factory
+
+
+def global_agent_policy_mapping_registry() -> Dict[str, CreateAgentPolicyMappingFunc]:
+    """
+    :return: global agent policy mapping registry
+    :rtype: AgentPolicyMappingRegistry
+    """
+    return sf_global_context().agent_policy_mapping_registry

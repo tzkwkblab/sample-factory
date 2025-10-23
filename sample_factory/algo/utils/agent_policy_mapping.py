@@ -2,20 +2,57 @@ import random
 
 import numpy as np
 
+from sample_factory.algo.utils.context import global_agent_policy_mapping_registry
 from sample_factory.algo.utils.env_info import EnvInfo
 from sample_factory.algo.utils.rl_utils import total_num_envs
+from typing import Any, Callable, Optional
 from sample_factory.utils.typing import Config
+from sample_factory.utils.utils import log
 
 
-class AgentPolicyMapping:
+def register_agent_policy_mapping(mapping_name: str, make_mapping_func: Callable[[Config, EnvInfo], Any]) -> None:
     """
-    This class currently implements the most simple mapping between agents in the envs and their associated policies.
+    Register a callable that creates a custom agent policy mapping.
+    """
+    mapping_registry = global_agent_policy_mapping_registry()
+
+    if mapping_name in mapping_registry:
+        log.warning(f"Agent policy mapping {mapping_name} already registered, overwriting...")
+
+    assert callable(make_mapping_func), f"{make_mapping_func=} must be callable"
+
+    mapping_registry[mapping_name] = make_mapping_func
+
+
+def create_agent_policy_mapping(mapping_name: Optional[str], cfg: Config, env_info: EnvInfo) -> Any:
+    """
+    Factory function that creates agent policy mapping instances.
+    """
+
+    if mapping_name is None:
+        return DefaultAgentPolicyMapping(cfg, env_info)
+
+    mapping_registry = global_agent_policy_mapping_registry()
+
+    if mapping_name not in mapping_registry:
+        msg = f"Agent policy mapping {mapping_name} not registered. See register_agent_policy_mapping()!"
+        log.error(msg)
+        log.debug(f"Registered agent policy mapping names: {mapping_registry.keys()}")
+        raise ValueError(msg)
+
+    make_mapping_func = mapping_registry[mapping_name]
+    mapping = make_mapping_func(cfg, env_info)
+
+    return mapping
+
+
+class DefaultAgentPolicyMapping:
+    """
+    This class implements the most simple mapping between agents in the envs and their associated policies.
     We just pick a random policy from the population for every agent at the beginning of the episode.
 
     Methods of this class can potentially be overloaded to provide a more clever mapping, e.g. we can minimize the
     number of different policies per rollout worker thus minimizing the amount of communication required.
-
-    TODO: would be nice to have a mechanism to provide custom mappings through API.
     """
 
     def __init__(self, cfg: Config, env_info: EnvInfo):
@@ -27,10 +64,6 @@ class AgentPolicyMapping:
             cfg.pbt_mix_policies_in_one_env if hasattr(cfg, "pbt_mix_policies_in_one_env") else False
         )  # TODO
 
-        self.independent_policies_for_each_agent = (
-            cfg.independent_policies_for_each_agent if hasattr(cfg, "independent_policies_for_each_agent") else False
-        )
-
         self.resample_env_policy_every = 10  # episodes
         self.env_policies = dict()
         self.env_policy_requests = dict()
@@ -41,9 +74,6 @@ class AgentPolicyMapping:
             assert total_envs % self.num_policies == 0, f"{total_envs=} must be divisible by {self.num_policies=}"
 
     def get_policy_for_agent(self, agent_idx: int, env_idx: int, global_env_idx: int) -> int:
-        if self.independent_policies_for_each_agent:
-            return agent_idx % self.num_policies
-
         if self.sync_mode:
             # env_id here is a global index of the policy
             # deterministic mapping ensures we always collect the same amount of experience per policy per iteration
