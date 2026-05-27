@@ -75,13 +75,19 @@ REWARD_CATEGORIES_TO_TUNE = {
 #     'ppo_clip_ratio', 'ppo_clip_value', 'vtrace_rho', 'vtrace_c',
 # }
 
-SPECIAL_PERTURBATION = dict(
+DEFAULT_SPECIAL_PERTURBATION = dict(
     gamma=perturb_exponential_decay,
     adam_beta1=perturb_exponential_decay,
     vtrace_rho=perturb_vtrace,
     vtrace_c=perturb_vtrace,
     batch_size=perturb_batch_size,
 )
+
+PERTURBATION_METHODS = {
+    'perturb_vtrace': perturb_vtrace,
+    'perturb_exponential_decay': perturb_exponential_decay,
+    'perturb_batch_size': perturb_batch_size,
+}
 
 
 def policy_cfg_file(cfg, policy_id):
@@ -114,6 +120,7 @@ class PopulationBasedTraining(AlgoObserver, EventLoopObject):
         self.runner: Runner = runner
 
         self.hyperparams_to_tune = set()
+        self.special_perturbation = copy.deepcopy(DEFAULT_SPECIAL_PERTURBATION)
 
         self.last_update = [0] * self.cfg.num_policies
 
@@ -131,6 +138,11 @@ class PopulationBasedTraining(AlgoObserver, EventLoopObject):
 
         # Set to non-None when policy x has to be replaced by replacement_policy[x]
         self.replacement_policy: Dict[PolicyID, Optional[PolicyID]] = {p: None for p in range(self.cfg.num_policies)}
+
+    def register_hyperparam_to_tune(self, hparam_name: str, perturb_method_name: Optional[str] = None) -> None:
+        self.hyperparams_to_tune.add(hparam_name)
+        if perturb_method_name is not None:
+            self.special_perturbation[hparam_name] = PERTURBATION_METHODS[perturb_method_name]
 
     def on_init(self, runner: Runner) -> None:
         self.env_info = runner.env_info
@@ -219,8 +231,8 @@ class PopulationBasedTraining(AlgoObserver, EventLoopObject):
             log.debug("%s changed to default value %r", param_name, default_param)
             return default_param
 
-        if param_name in SPECIAL_PERTURBATION:
-            new_value = SPECIAL_PERTURBATION[param_name](param, self.cfg)
+        if param_name in self.special_perturbation:
+            new_value = self.special_perturbation[param_name](param, self.cfg)
         elif type(param) is bool:
             new_value = not param
         elif isinstance(param, SupportsFloat):

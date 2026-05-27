@@ -424,6 +424,10 @@ class Learner(Configurable):
                 param_group["betas"] = (self.cfg.adam_beta1, self.cfg.adam_beta2)
                 log.debug("Optimizer lr value %.7f, betas: %r", param_group["lr"], param_group["betas"])
 
+            for aux_model in self.aux_models:
+                if hasattr(aux_model, "update_from_cfg"):
+                    aux_model.update_from_cfg(self.cfg)
+
             self.new_cfg = None
 
     def _maybe_load_policy(self) -> None:

@@ -112,6 +112,12 @@ class AuxModel(Configurable):
         """
         return None
     
+    def update_from_cfg(self, cfg: Config):
+        """
+        Update aux model internal state from the latest learner config (e.g. after PBT mutation).
+        """
+        pass
+
     def record_summaries(self) -> Dict[str, float]:
         """
         Record summaries for the aux model.
