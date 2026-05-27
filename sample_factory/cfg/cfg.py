@@ -800,6 +800,12 @@ def add_pbt_args(p: ArgumentParser):
         help="Absolute gap in true reward when replacing weights of the policy with a better performing one",
     )
     p.add_argument(
+        "--pbt_optimize_basic_params",
+        default=True,
+        type=str2bool,
+        help="Whether to optimize basic PBT hyperparameters (e.g. learning rate, PPO coefficients)",
+    )
+    p.add_argument(
         "--pbt_optimize_gamma",
         default=False,
         type=str2bool,

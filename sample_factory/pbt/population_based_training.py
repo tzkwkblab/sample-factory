@@ -55,7 +55,7 @@ def perturb_batch_size(x, cfg):
     return new_value
 
 
-HYPERPARAMS_TO_TUNE = {
+DEFAULT_BASIC_HYPERPARAMS_TO_TUNE = {
     "learning_rate",
     "exploration_loss_coeff",
     "value_loss_coeff",
@@ -113,12 +113,7 @@ class PopulationBasedTraining(AlgoObserver, EventLoopObject):
 
         self.runner: Runner = runner
 
-        # currently not supported, would require changes on the batcher
-        # if cfg.pbt_optimize_batch_size:
-        #     HYPERPARAMS_TO_TUNE.add("batch_size")
-
-        if cfg.pbt_optimize_gamma:
-            HYPERPARAMS_TO_TUNE.add("gamma")
+        self.hyperparams_to_tune = set()
 
         self.last_update = [0] * self.cfg.num_policies
 
@@ -141,6 +136,14 @@ class PopulationBasedTraining(AlgoObserver, EventLoopObject):
         self.env_info = runner.env_info
         self.default_reward_shaping = self.env_info.reward_shaping_scheme
 
+        # currently not supported, would require changes on the batcher
+        # if self.cfg.pbt_optimize_batch_size:
+        #     self.hyperparams_to_tune.add("batch_size")
+        if self.cfg.pbt_optimize_basic_params:
+            self.hyperparams_to_tune.update(DEFAULT_BASIC_HYPERPARAMS_TO_TUNE)
+        if self.cfg.pbt_optimize_gamma:
+            self.hyperparams_to_tune.add("gamma")
+
         for policy_id in range(self.cfg.num_policies):
             # save the policy-specific configs if they don't exist, or else load them from files
             policy_cfg_filename = policy_cfg_file(self.cfg, policy_id)
@@ -151,7 +154,7 @@ class PopulationBasedTraining(AlgoObserver, EventLoopObject):
                     self.policy_cfg[policy_id] = json_params
             else:
                 self.policy_cfg[policy_id] = dict()
-                for param_name in HYPERPARAMS_TO_TUNE:
+                for param_name in self.hyperparams_to_tune:
                     self.policy_cfg[policy_id][param_name] = self.cfg[param_name]
 
                 if policy_id > 0:  # keep one policy with default settings in the beginning
