@@ -56,6 +56,9 @@ def perturb_batch_size(x, cfg):
 
 
 def perturb_normal(x, cfg):
+    # NOTE: This can sample non-positive values for positive-only hyperparameters
+    # (e.g. learning_rate, ppo_clip_ratio, or loss coefficients), which can break
+    # training. Use bounded transforms/clamping at call sites when tuning such params.
     return random.gauss(x, cfg.pbt_perturb_normal_stddev)
 
 
