@@ -55,6 +55,13 @@ def perturb_batch_size(x, cfg):
     return new_value
 
 
+def perturb_normal(x, cfg):
+    # NOTE: This can sample non-positive values for positive-only hyperparameters
+    # (e.g. learning_rate, ppo_clip_ratio, or loss coefficients), which can break
+    # training. Use bounded transforms/clamping at call sites when tuning such params.
+    return random.gauss(x, cfg.pbt_perturb_normal_stddev)
+
+
 DEFAULT_BASIC_HYPERPARAMS_TO_TUNE = {
     "learning_rate",
     "exploration_loss_coeff",
@@ -87,6 +94,7 @@ PERTURBATION_METHODS = {
     'perturb_vtrace': perturb_vtrace,
     'perturb_exponential_decay': perturb_exponential_decay,
     'perturb_batch_size': perturb_batch_size,
+    'perturb_normal': perturb_normal,
 }
 
 
