@@ -831,6 +831,12 @@ def add_pbt_args(p: ArgumentParser):
         help="When PBT mutates a float hyperparam, it samples the change magnitude randomly from the uniform distribution [pbt_perturb_min, pbt_perturb_max]",
     )
     p.add_argument(
+        "--pbt_perturb_normal_stddev",
+        default=1.0,
+        type=float,
+        help="Standard deviation for normal-distribution-based PBT perturbation (used by perturb_normal)",
+    )
+    p.add_argument(
         "--aux_models",
         default=None,
         type=str,

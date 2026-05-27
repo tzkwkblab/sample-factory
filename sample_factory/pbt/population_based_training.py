@@ -55,6 +55,10 @@ def perturb_batch_size(x, cfg):
     return new_value
 
 
+def perturb_normal(x, cfg):
+    return random.gauss(x, cfg.pbt_perturb_normal_stddev)
+
+
 DEFAULT_BASIC_HYPERPARAMS_TO_TUNE = {
     "learning_rate",
     "exploration_loss_coeff",
@@ -87,6 +91,7 @@ PERTURBATION_METHODS = {
     'perturb_vtrace': perturb_vtrace,
     'perturb_exponential_decay': perturb_exponential_decay,
     'perturb_batch_size': perturb_batch_size,
+    'perturb_normal': perturb_normal,
 }
 
 
