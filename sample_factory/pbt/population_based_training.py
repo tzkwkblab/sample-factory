@@ -84,7 +84,6 @@ DEFAULT_SPECIAL_PERTURBATION = dict(
 )
 
 PERTURBATION_METHODS = {
-    'perturb_float': perturb_float,
     'perturb_vtrace': perturb_vtrace,
     'perturb_exponential_decay': perturb_exponential_decay,
     'perturb_batch_size': perturb_batch_size,
