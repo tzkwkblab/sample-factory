@@ -410,7 +410,7 @@ class PopulationBasedTraining(AlgoObserver, EventLoopObject):
             self.runner.update_reward_shaping(policy_id, self.policy_reward_shaping[policy_id])
 
     def on_training_step(self, runner: Runner, training_iteration_since_resume: int) -> None:
-        if not self.cfg.with_pbt or self.cfg.num_policies <= 1:
+        if self.cfg.num_policies <= 1:
             return
 
         env_steps = runner.env_steps
