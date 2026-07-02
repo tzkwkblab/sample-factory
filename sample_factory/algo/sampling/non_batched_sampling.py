@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from numbers import Integral
 import random
 from queue import Empty
 from typing import Any, Dict, List, Optional, Tuple
@@ -515,6 +516,63 @@ class NonBatchedVectorEnvRunner(VectorEnvRunner):
         rewards = np.clip(rewards, -self.cfg.reward_clip, self.cfg.reward_clip)
         return rewards
 
+    def _requested_policy_id(
+        self, actor_state: ActorState, request_type: Any, env_policy_ids: List[int]
+    ) -> Optional[int]:
+        if request_type == "random":
+            return random.randrange(self.cfg.num_policies)
+
+        if request_type == "random_other":
+            other_policy_ids = {
+                policy_id
+                for agent_i, policy_id in enumerate(env_policy_ids)
+                if agent_i != actor_state.agent_idx
+            }
+            candidates = [
+                policy_id for policy_id in range(self.cfg.num_policies) if policy_id not in other_policy_ids
+            ]
+            if not candidates:
+                log.warning(
+                    "Ignoring request_policy_change=random_other for env %d agent %d because no policy id is available",
+                    actor_state.env_idx,
+                    actor_state.agent_idx,
+                )
+                return None
+
+            return random.choice(candidates)
+
+        if isinstance(request_type, Integral) and not isinstance(request_type, bool):
+            new_policy_id = int(request_type)
+            if 0 <= new_policy_id < self.cfg.num_policies:
+                return new_policy_id
+
+            log.warning(
+                "Ignoring request_policy_change=%r for env %d agent %d because it is outside [0, %d)",
+                request_type,
+                actor_state.env_idx,
+                actor_state.agent_idx,
+                self.cfg.num_policies,
+            )
+            return None
+
+        log.warning(
+            "Ignoring unsupported request_policy_change=%r for env %d agent %d",
+            request_type,
+            actor_state.env_idx,
+            actor_state.agent_idx,
+        )
+        return None
+
+    def _process_policy_change_request(
+        self, actor_state: ActorState, info: Dict[str, Any], env_policy_ids: List[int]
+    ) -> None:
+        if "request_policy_change" not in info:
+            return
+
+        new_policy_id = self._requested_policy_id(actor_state, info["request_policy_change"], env_policy_ids)
+        if new_policy_id is not None:
+            actor_state._on_new_policy(new_policy_id)
+
     def _process_env_step(self, new_obs, rewards, terminated, truncated, infos, env_i):
         """
         Process step outputs from a single environment in the vector.
@@ -545,6 +603,10 @@ class NonBatchedVectorEnvRunner(VectorEnvRunner):
 
             if episode_report:
                 episodic_stats.append(episode_report)
+
+        env_policy_ids = [actor_state.curr_policy_id for actor_state in env_actor_states]
+        for agent_i, actor_state in enumerate(env_actor_states):
+            self._process_policy_change_request(actor_state, infos[agent_i], env_policy_ids)
 
         policy_mapping_stats = self.policy_mgr.generate_policy_mapping_stats(env_i)
         if policy_mapping_stats is not None:
