@@ -85,6 +85,7 @@ class ActorState:
         self.is_active = True
 
         self.needs_buffer = True  # whether this actor requires a new trajectory buffer
+        self.disable_learning = False  # whether to drop the current trajectory instead of sending it to learner
 
         self.num_trajectories = 0
 
@@ -202,6 +203,9 @@ class ActorState:
         # multiply by frameskip to get the episode lenghts matching the actual number of simulated steps
         self.last_episode_duration += self.env_info.frameskip if self.cfg.summaries_use_frameskip else 1
 
+        if info.get("disable_learning", False):
+            self.disable_learning = True
+
         self.is_active = info.get("is_active", True)
 
         report = None
@@ -227,6 +231,12 @@ class ActorState:
         cfg.rollout in this function
         :return: dictionary with auxiliary information about the trajectory
         """
+
+        if self.disable_learning:
+            self.traj_buffer_queue.put(self.curr_traj_buffer_idx)
+            self.disable_learning = False
+            self.needs_buffer = True
+            return []
 
         # Saving obs and hidden states for the step AFTER the last step in the current rollout.
         # We're going to need them later when we calculate next step value estimates.
