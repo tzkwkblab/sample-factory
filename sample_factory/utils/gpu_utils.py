@@ -19,12 +19,15 @@ def set_global_cuda_envvars(cfg):
     log.info(f"Environment var {CUDA_ENVVAR} is {os.environ[CUDA_ENVVAR]}")
 
 
-def get_available_gpus() -> List[int]:
+def get_available_gpus() -> List[str]:
     """
-    Returns indices of GPUs specified by CUDA_VISIBLE_DEVICES.
+    Returns GPU device identifiers specified by CUDA_VISIBLE_DEVICES.
+
+    CUDA_VISIBLE_DEVICES accepts not only numeric device indices such as "0,1",
+    but also CUDA GPU UUIDs such as "GPU-..." and MIG identifiers.
     """
     orig_visible_devices = os.environ[f"{CUDA_ENVVAR}"]
-    available_gpus = [int(g.strip()) for g in orig_visible_devices.split(",") if g and not g.isspace()]
+    available_gpus = [g.strip() for g in orig_visible_devices.split(",") if g.strip()]
     return available_gpus
 
 
@@ -62,7 +65,7 @@ def gpus_for_process(process_idx: int, num_gpus_per_process: int, gpu_mask: Opti
 def set_gpus_for_process(process_idx, num_gpus_per_process, process_type, gpu_mask=None):
     # in this function we want to limit the number of GPUs visible to the process, i.e. if
     # CUDA_VISIBLE_DEVICES is '1,2,3' and we want to use GPU index 2, then we want to set
-    # CUDA_VISIBLE_DEVICES to '3' for this process
+    # CUDA_VISIBLE_DEVICES to '3' for this process. Device identifiers can also be UUID strings.
     gpus_to_use = gpus_for_process(process_idx, num_gpus_per_process, gpu_mask)
 
     if not gpus_to_use:
@@ -70,7 +73,7 @@ def set_gpus_for_process(process_idx, num_gpus_per_process, process_type, gpu_ma
         log.debug("Not using GPUs for %s process %d", process_type, process_idx)
     else:
         available_gpus = get_available_gpus()
-        cuda_devices_to_use = ",".join([str(available_gpus[g]) for g in gpus_to_use])
+        cuda_devices_to_use = ",".join([available_gpus[g] for g in gpus_to_use])
         os.environ[CUDA_ENVVAR] = cuda_devices_to_use
         log.info(
             "Set environment var %s to %r (GPU indices %r) for %s process %d",
