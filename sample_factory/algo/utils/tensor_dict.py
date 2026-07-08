@@ -66,6 +66,8 @@ class TensorDict(dict):
                 else:
                     raise ValueError(f"Type {type(new_data)} not supported in set_data_func")
 
+                if x[index].shape == () and n.ndim > 0 and n.size == 1:
+                    n = n.item()
                 x[index] = n
 
 
