@@ -150,7 +150,7 @@ def get_policy_outputs(actor_critic_list, agent_policy_map, obs, rnn_states, act
             outputs_list.append(outputs)
 
         policy_outputs = TensorDict()
-        policy_outputs["actions"] = torch.stack([outputs["actions"] for outputs in outputs_list])
+        policy_outputs["actions"] = torch.cat([outputs["actions"] for outputs in outputs_list], dim=0)
         policy_outputs["new_rnn_states"] = torch.stack([outputs["new_rnn_states"][0] for outputs in outputs_list])
 
     return policy_outputs
