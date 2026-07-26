@@ -2,7 +2,16 @@ import os
 
 import cv2
 import numpy as np
-from huggingface_hub import HfApi, Repository, repocard, upload_folder
+from huggingface_hub import HfApi, repocard, upload_folder
+
+try:
+    from huggingface_hub import Repository
+
+    _HAS_LEGACY_REPOSITORY = True
+except ImportError:
+    from huggingface_hub import snapshot_download
+
+    _HAS_LEGACY_REPOSITORY = False
 
 from sample_factory.utils.typing import Config
 from sample_factory.utils.utils import log, project_tmp_dir
@@ -142,5 +151,11 @@ def load_from_hf(dir_path: str, repo_id: str):
     repo_name = temp[1]
 
     local_dir = os.path.join(dir_path, repo_name)
-    Repository(local_dir, repo_id)
-    log.info(f"The repository {repo_id} has been cloned to {local_dir}")
+    if _HAS_LEGACY_REPOSITORY:
+        Repository(local_dir, repo_id)
+        action = "cloned"
+    else:
+        snapshot_download(repo_id=repo_id, local_dir=local_dir)
+        action = "downloaded"
+
+    log.info(f"The repository {repo_id} has been {action} to {local_dir}")
