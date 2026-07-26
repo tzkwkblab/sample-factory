@@ -67,7 +67,7 @@ setup(
         "signal-slot-mp>=1.0.3,<2.0",
         "filelock",
         "wandb>=0.12.9",
-        "huggingface-hub>=0.10.0,<1.0",
+        "huggingface-hub>=0.10.0,<2.0",
         "pandas",
         "opencv-python",
     ],
