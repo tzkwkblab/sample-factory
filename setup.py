@@ -63,6 +63,7 @@ setup(
         "psutil>=5.7.0",
         "threadpoolctl>=2.0.0",
         "colorlog",
+        "rich>=13.0,<15.0",
         # "faster-fifo>=1.4.2,<2.0",  <-- installed by signal-slot-mp
         "signal-slot-mp>=1.0.3,<2.0",
         "filelock",
@@ -90,6 +91,7 @@ setup(
     },
     package_dir={"": "./"},
     packages=setuptools.find_packages(where="./", include=["sample_factory*", "sf_examples*"]),
+    entry_points={"console_scripts": ["sf-progress=sample_factory.utils.progress_viewer:main"]},
     include_package_data=True,
     python_requires=">=3.8",
 )
