@@ -34,6 +34,7 @@ from sample_factory.cfg.configurable import Configurable
 from sample_factory.utils.attr_dict import AttrDict
 from sample_factory.utils.dicts import iterate_recursively
 from sample_factory.utils.gpu_utils import set_global_cuda_envvars
+from sample_factory.utils.progress_viewer import TrainingProgressWriter
 from sample_factory.utils.timing import Timing
 from sample_factory.utils.typing import PolicyID, StatusCode
 from sample_factory.utils.utils import (
@@ -105,6 +106,11 @@ class Runner(EventLoopObject, Configurable):
 
         # env_steps counts total number of simulation steps per policy (including frameskipped)
         self.env_steps: Dict[PolicyID, int] = dict()
+        self.training_progress = TrainingProgressWriter(
+            experiment_dir=experiment_dir(self.cfg, mkdir=False),
+            num_policies=self.cfg.num_policies,
+            total_env_steps=self.cfg.train_for_env_steps,
+        )
 
         # samples_collected counts the total number of observations processed by the algorithm
         self.samples_collected = [0 for _ in range(self.cfg.num_policies)]
@@ -355,6 +361,8 @@ class Runner(EventLoopObject, Configurable):
         Called periodically (every self.report_interval_sec seconds).
         Print experiment stats (FPS, avg rewards) to console and dump TF summaries collected from workers to disk.
         """
+
+        self.training_progress.update(self.env_steps)
 
         # don't have enough statistic from the learners yet
         if len(self.env_steps) < self.cfg.num_policies:
@@ -755,16 +763,25 @@ class Runner(EventLoopObject, Configurable):
 
     # noinspection PyBroadException
     def run(self) -> StatusCode:
-        with self.timing.timeit("main_loop"):
-            try:
-                evt_loop_status = self.event_loop.exec()
-                self.status = (
-                    ExperimentStatus.INTERRUPTED if evt_loop_status == EventLoopStatus.INTERRUPTED else self.status
-                )
-                self.stop.emit(self.object_id)
-            except Exception:
-                log.exception(f"Uncaught exception in {self.object_id} evt loop")
-                self.status = ExperimentStatus.FAILURE
+        self.training_progress.update(self.env_steps, status="running")
+        try:
+            with self.timing.timeit("main_loop"):
+                try:
+                    evt_loop_status = self.event_loop.exec()
+                    self.status = (
+                        ExperimentStatus.INTERRUPTED if evt_loop_status == EventLoopStatus.INTERRUPTED else self.status
+                    )
+                    self.stop.emit(self.object_id)
+                except Exception:
+                    log.exception(f"Uncaught exception in {self.object_id} evt loop")
+                    self.status = ExperimentStatus.FAILURE
+        finally:
+            final_status = {
+                ExperimentStatus.SUCCESS: "success",
+                ExperimentStatus.FAILURE: "failure",
+                ExperimentStatus.INTERRUPTED: "interrupted",
+            }[self.status]
+            self.training_progress.update(self.env_steps, status=final_status)
 
         log.info(self.timing)
         if self.total_env_steps_since_resume is None:
