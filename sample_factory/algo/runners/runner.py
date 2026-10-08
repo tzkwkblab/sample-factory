@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import json
 import math
 import shutil
@@ -17,6 +18,7 @@ from sample_factory.algo.learning.learner_worker import LearnerWorker
 from sample_factory.algo.sampling.sampler import AbstractSampler
 from sample_factory.algo.sampling.stats import samples_stats_handler, stats_msg_handler, timing_msg_handler
 from sample_factory.algo.utils.env_info import EnvInfo, obtain_env_info_in_a_separate_process
+from sample_factory.algo.utils.frozen_policies import parse_frozen_policies
 from sample_factory.algo.utils.heartbeat import HeartbeatStoppableEventLoopObject
 from sample_factory.algo.utils.misc import (
     EPISODIC,
@@ -105,6 +107,9 @@ class Runner(EventLoopObject, Configurable):
 
         # env_steps counts total number of simulation steps per policy (including frameskipped)
         self.env_steps: Dict[PolicyID, int] = dict()
+
+        # policies that are not trained (--frozen_policies), validated later in init()
+        self.frozen_policies: frozenset = frozenset()
 
         # samples_collected counts the total number of observations processed by the algorithm
         self.samples_collected = [0 for _ in range(self.cfg.num_policies)]
@@ -380,7 +385,8 @@ class Runner(EventLoopObject, Configurable):
         fps = fps_stats[0]
 
         default_policy = 0
-        for policy_id, env_steps in self.env_steps.items():
+        for policy_id in self.env_steps:
+            env_steps = self._summary_env_steps(policy_id)
             writer = self.writers[policy_id]
             if policy_id == default_policy:
                 if not math.isnan(fps):
@@ -430,6 +436,18 @@ class Runner(EventLoopObject, Configurable):
         for w in self.writers.values():
             w.flush()
 
+    def _summary_env_steps(self, policy_id: PolicyID) -> int:
+        """
+        X-axis value for the summaries of a policy. Env steps of frozen policies never change, so we plot their
+        summaries against the progress of the policies that are being trained.
+        """
+        if policy_id in self.frozen_policies:
+            trained = [s for p, s in self.env_steps.items() if p not in self.frozen_policies]
+            if trained:
+                return max(trained)
+
+        return self.env_steps[policy_id]
+
     def _propagate_training_info(self):
         """
         Send the training stats (such as the number of processed env steps) to the sampler.
@@ -473,6 +491,9 @@ class Runner(EventLoopObject, Configurable):
         metric = self.cfg.save_best_metric
         if metric in self.policy_avg_stats:
             for policy_id in range(self.cfg.num_policies):
+                if policy_id in self.frozen_policies:
+                    continue
+
                 # check if number of samples collected is greater than cfg.save_best_after
                 env_steps = self.env_steps[policy_id]
                 if env_steps < self.cfg.save_best_after:
@@ -536,6 +557,10 @@ class Runner(EventLoopObject, Configurable):
 
         # check for any incompatible arguments
         if not preprocess_cfg(self.cfg, self.env_info):
+            return ExperimentStatus.FAILURE
+
+        self.frozen_policies = parse_frozen_policies(self.cfg)
+        if not self._frozen_policies_have_checkpoints():
             return ExperimentStatus.FAILURE
 
         log.debug(f"Starting experiment with the following configuration:\n{cfg_str(self.cfg)}")
@@ -686,8 +711,26 @@ class Runner(EventLoopObject, Configurable):
         # connect additional signal-slot pairs in the observers if needed
         self._observers_call(AlgoObserver.on_connect_components, self)
 
+    def _frozen_policies_have_checkpoints(self) -> bool:
+        """Frozen policies are never trained, so starting them from random weights is most likely a mistake."""
+        name_prefix = dict(latest="checkpoint", best="best")[self.cfg.load_checkpoint_kind]
+        ok = True
+        for policy_id in sorted(self.frozen_policies):
+            checkpoint_dir = join(experiment_dir(cfg=self.cfg), f"checkpoint_p{policy_id}")
+            if not glob.glob(join(checkpoint_dir, f"{name_prefix}_*")):
+                log.error(
+                    f"Frozen policy {policy_id} has no checkpoint ({name_prefix}_*) in {checkpoint_dir}. "
+                    "Copy the checkpoint directory of the trained policy there and start with "
+                    "--restart_behavior=resume (see --frozen_policies)."
+                )
+                ok = False
+
+        return ok
+
     def _should_end_training(self):
-        end = len(self.env_steps) > 0 and all(s > self.cfg.train_for_env_steps for s in self.env_steps.values())
+        # env steps of frozen policies never increase, they should not prevent (or trigger) the end of training
+        trained_steps = [s for p, s in self.env_steps.items() if p not in self.frozen_policies]
+        end = len(trained_steps) > 0 and all(s > self.cfg.train_for_env_steps for s in trained_steps)
         end |= self.total_train_seconds > self.cfg.train_for_seconds
         return end
 

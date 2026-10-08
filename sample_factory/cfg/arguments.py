@@ -6,6 +6,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from sample_factory.algo.utils.env_info import EnvInfo
+from sample_factory.algo.utils.frozen_policies import parse_frozen_policies
 from sample_factory.algo.utils.rl_utils import total_num_agents
 from sample_factory.cfg.cfg import (
     add_basic_cli_args,
@@ -143,6 +144,18 @@ def verify_cfg(cfg: Config, env_info: EnvInfo) -> bool:
         log.warning(
             "In batched mode we're using a single policy per worker which does not allow us to use multiple different policies in the same env (see agent_policy_mapping.py)."
         )
+
+    try:
+        frozen_policies = parse_frozen_policies(cfg)
+    except ValueError as exc:
+        frozen_policies = frozenset()
+        cfg_error(str(exc))
+
+    if frozen_policies:
+        if cfg.with_pbt:
+            cfg_error("--frozen_policies cannot be used with --with_pbt=True (PBT replaces policy weights)")
+        if len(frozen_policies) >= cfg.num_policies:
+            cfg_error(f"--frozen_policies={cfg.frozen_policies} freezes all {cfg.num_policies=}, nothing to train")
 
     sync_rl = not cfg.async_rl
     samples_per_training_iteration = cfg.num_batches_per_epoch * cfg.batch_size

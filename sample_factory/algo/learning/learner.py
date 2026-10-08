@@ -18,6 +18,7 @@ from sample_factory.algo.utils.env_info import EnvInfo
 from sample_factory.algo.utils.misc import LEARNER_ENV_STEPS, POLICY_ID_KEY, STATS_KEY, TRAIN_STATS, memory_stats
 from sample_factory.algo.utils.model_sharing import ParameterServer
 from sample_factory.algo.utils.optimizers import Lamb
+from sample_factory.algo.utils.frozen_policies import is_policy_frozen
 from sample_factory.algo.utils.rl_utils import gae_advantages, prepare_and_normalize_obs
 from sample_factory.algo.utils.shared_buffers import policy_device
 from sample_factory.algo.utils.tensor_dict import TensorDict, shallow_recursive_copy
@@ -138,6 +139,10 @@ class Learner(Configurable):
 
         self.policy_id = policy_id
 
+        # frozen policies (--frozen_policies) are used for inference only: no gradient updates, no updates of the
+        # normalization statistics, no checkpoints
+        self.frozen: bool = is_policy_frozen(cfg, policy_id)
+
         self.env_info = env_info
 
         self.device = None
@@ -253,6 +258,8 @@ class Learner(Configurable):
             self.extra_buffer_fields.extend(aux_model.extra_buffer_requirements())
 
         self.load_from_checkpoint(self.policy_id)
+        if self.frozen:
+            log.info(f"Policy {self.policy_id} is frozen (loaded at {self.train_step=}, {self.env_steps=})")
         self.param_server.init(self.actor_critic, self.train_step, self.device)
         self.policy_versions_tensor[self.policy_id] = self.train_step
 
@@ -349,6 +356,10 @@ class Learner(Configurable):
         if not self.is_initialized:
             return False
 
+        if self.frozen:
+            # keep the checkpoints we loaded the frozen policy from untouched
+            return False
+
         checkpoint = self._get_checkpoint_dict()
         assert checkpoint is not None
 
@@ -377,6 +388,9 @@ class Learner(Configurable):
         return self._save_impl("checkpoint", "", self.cfg.keep_checkpoints)
 
     def save_milestone(self):
+        if self.frozen:
+            return
+
         checkpoint = self._get_checkpoint_dict()
         assert checkpoint is not None
         checkpoint_dir = self.checkpoint_dir(self.cfg, self.policy_id)
@@ -388,7 +402,7 @@ class Learner(Configurable):
         torch.save(checkpoint, milestone_path)
 
     def save_best(self, policy_id, metric, metric_value) -> bool:
-        if policy_id != self.policy_id:
+        if policy_id != self.policy_id or self.frozen:
             return False
         p = 3  # precision, number of significant digits
         if metric_value - self.best_performance > 1 / 10**p:
@@ -1110,6 +1124,10 @@ class Learner(Configurable):
             return buff, dataset_size, num_invalids
 
     def train(self, batch: TensorDict) -> Optional[Dict]:
+        if self.frozen:
+            # skip before _prepare_batch() because it updates the observation and return normalizers
+            return None
+
         with self.timing.add_time("misc"):
             self._maybe_update_cfg()
             self._maybe_load_policy()

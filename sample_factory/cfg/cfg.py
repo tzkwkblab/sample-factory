@@ -50,6 +50,15 @@ def add_rl_args(p: ArgumentParser):
         help="Number of policies to train jointly, i.e. for multi-agent environments",
     )
     p.add_argument(
+        "--frozen_policies",
+        default="",
+        type=str,
+        help="Comma-separated IDs of policies that are not trained (e.g. '0,1,2'). "
+        "Learners of frozen policies skip gradient updates and normalization statistics updates, "
+        "and never write checkpoints, so the weights loaded from checkpoint_p<ID> in the experiment directory "
+        "are used for inference as is. Cannot be combined with PBT.",
+    )
+    p.add_argument(
         "--async_rl",
         default=True,
         type=str2bool,
