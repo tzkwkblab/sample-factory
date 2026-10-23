@@ -15,6 +15,10 @@ STATS_KEY = "stats"
 SAMPLES_COLLECTED = "samples_collected"
 POLICY_ID_KEY = "policy_id"
 POLICY_MAPPING_STATS = "policy_mapping_stats"
+# Episodic stats under this key (e.g. info["episode_extra_stats"][OBSERVER_ONLY_STATS]) are not averaged and
+# written to TensorBoard by the default handler; they only reach handlers registered with
+# Runner.register_episodic_stats_handler() (e.g. per-policy stats of a population written to a CSV file)
+OBSERVER_ONLY_STATS = "_observer_only"
 
 
 MAGIC_FLOAT = -4242.42

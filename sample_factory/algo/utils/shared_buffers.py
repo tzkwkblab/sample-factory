@@ -149,6 +149,15 @@ def alloc_policy_output_tensors(cfg, env_info: EnvInfo, rnn_size, device, share)
     return policy_output_tensors, output_names, output_sizes
 
 
+def traj_queue_size_bytes(num_buffers: int) -> int:
+    """
+    Size of the queue that initially holds the indices of all trajectory buffers.
+    The default 1MB of get_queue() overflows (queue.Full) at ~50000 buffers, i.e. num_agents * num_envs ~ 25000.
+    Each pickled index takes ~20 bytes in the queue, 64 leaves a margin.
+    """
+    return max(1_000_000, 64 * num_buffers)
+
+
 class BufferMgr(Configurable):
     def __init__(self, cfg, env_info: EnvInfo):
         super().__init__(cfg)
@@ -210,7 +219,9 @@ class BufferMgr(Configurable):
                 self.max_batches_to_accumulate * self.trajectories_per_training_iteration * cfg.num_policies,
             )
 
-            self.traj_buffer_queues[device] = get_queue(cfg.serial_mode)
+            self.traj_buffer_queues[device] = get_queue(
+                cfg.serial_mode, buffer_size_bytes=traj_queue_size_bytes(num_buffers)
+            )
 
             self.traj_tensors_torch[device] = alloc_trajectory_tensors(
                 env_info,
