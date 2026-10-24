@@ -23,6 +23,7 @@ from sample_factory.algo.utils.heartbeat import HeartbeatStoppableEventLoopObjec
 from sample_factory.algo.utils.misc import (
     EPISODIC,
     LEARNER_ENV_STEPS,
+    OBSERVER_ONLY_STATS,
     POLICY_MAPPING_STATS,
     SAMPLES_COLLECTED,
     STATS_KEY,
@@ -269,8 +270,27 @@ class Runner(EventLoopObject, Configurable):
         runner.env_steps[policy_id] = env_steps
 
     @staticmethod
+    def _without_observer_only_stats(d: Dict) -> Dict:
+        """Copy of d without OBSERVER_ONLY_STATS keys at any level (d itself if there are none)."""
+        res = None
+        for key, value in d.items():
+            new_value = value
+            if key == OBSERVER_ONLY_STATS:
+                new_value = None
+            elif isinstance(value, dict):
+                new_value = Runner._without_observer_only_stats(value)
+            if new_value is not value:
+                if res is None:
+                    res = dict(d)
+                if new_value is None:
+                    del res[key]
+                else:
+                    res[key] = new_value
+        return d if res is None else res
+
+    @staticmethod
     def _episodic_stats_handler(runner: Runner, msg: Dict, policy_id: PolicyID) -> None:
-        s = msg[EPISODIC]
+        s = Runner._without_observer_only_stats(msg[EPISODIC])
         for _, key, value in iterate_recursively(s):
             if key not in runner.policy_avg_stats:
                 runner.policy_avg_stats[key] = [
@@ -731,7 +751,9 @@ class Runner(EventLoopObject, Configurable):
         # env steps of frozen policies never increase, they should not prevent (or trigger) the end of training
         trained_steps = [s for p, s in self.env_steps.items() if p not in self.frozen_policies]
         end = len(trained_steps) > 0 and all(s > self.cfg.train_for_env_steps for s in trained_steps)
-        end |= self.total_train_seconds > self.cfg.train_for_seconds
+        # total_train_seconds is not updated (it only affects which stats are written to summaries),
+        # so we measure the time since the runner was created
+        end |= time.time() - self.start_time > self.cfg.train_for_seconds
         return end
 
     def _after_training_iteration(self, training_iteration_since_resume: int):

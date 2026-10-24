@@ -179,6 +179,10 @@ class Learner(Configurable):
         self.exploration_loss_func: Optional[Callable] = None
         self.kl_loss_func: Optional[Callable] = None
 
+        # per-sample loss weights of the current minibatch (after masked_select) when the model splits samples
+        # into groups (see ActorCritic.sample_groups()), otherwise None and losses are plain means
+        self._loss_weights: Optional[Tensor] = None
+
         self.aux_models: Optional[List[AuxModel]] = \
             create_aux_models(self.cfg.aux_models, self.cfg, self.env_info, self)
 
@@ -459,14 +463,22 @@ class Learner(Configurable):
 
             self.policy_to_load = None
 
-    @staticmethod
-    def _policy_loss(ratio, adv, clip_ratio_low, clip_ratio_high, valids, num_invalids: int):
+    def _masked_mean(self, x: Tensor, valids: Tensor, num_invalids: int) -> Tensor:
+        """
+        Mean over valid samples. With sample groups, this is the sum of per-group means, so that the gradient
+        w.r.t. the parameters of each group is the same as with a separate learner for that group.
+        """
+        x = masked_select(x, valids, num_invalids)
+        if self._loss_weights is None:
+            return x.mean()
+        return (x * self._loss_weights).sum()
+
+    def _policy_loss(self, ratio, adv, clip_ratio_low, clip_ratio_high, valids, num_invalids: int):
         clipped_ratio = torch.clamp(ratio, clip_ratio_low, clip_ratio_high)
         loss_unclipped = ratio * adv
         loss_clipped = clipped_ratio * adv
         loss = torch.min(loss_unclipped, loss_clipped)
-        loss = masked_select(loss, valids, num_invalids)
-        loss = -loss.mean()
+        loss = -self._masked_mean(loss, valids, num_invalids)
 
         return loss
 
@@ -483,8 +495,7 @@ class Learner(Configurable):
         value_original_loss = (new_values - target).pow(2)
         value_clipped_loss = (value_clipped - target).pow(2)
         value_loss = torch.max(value_original_loss, value_clipped_loss)
-        value_loss = masked_select(value_loss, valids, num_invalids)
-        value_loss = value_loss.mean()
+        value_loss = self._masked_mean(value_loss, valids, num_invalids)
 
         value_loss *= self.cfg.value_loss_coeff
 
@@ -495,8 +506,8 @@ class Learner(Configurable):
     ) -> Tuple[Tensor, Tensor]:
         old_action_distribution = get_action_distribution(action_space, action_logits)
         kl_old = action_distribution.kl_divergence(old_action_distribution)
+        kl_loss = self._masked_mean(kl_old, valids, num_invalids)
         kl_old = masked_select(kl_old, valids, num_invalids)
-        kl_loss = kl_old.mean()
 
         kl_loss *= self.cfg.kl_loss_coeff
 
@@ -504,13 +515,12 @@ class Learner(Configurable):
 
     def _entropy_exploration_loss(self, action_distribution, valids, num_invalids: int) -> Tensor:
         entropy = action_distribution.entropy()
-        entropy = masked_select(entropy, valids, num_invalids)
-        entropy_loss = -self.cfg.exploration_loss_coeff * entropy.mean()
+        entropy_loss = -self.cfg.exploration_loss_coeff * self._masked_mean(entropy, valids, num_invalids)
         return entropy_loss
 
     def _symmetric_kl_exploration_loss(self, action_distribution, valids, num_invalids: int) -> Tensor:
         kl_prior = action_distribution.symmetric_kl_with_uniform_prior()
-        kl_prior = masked_select(kl_prior, valids, num_invalids).mean()
+        kl_prior = self._masked_mean(kl_prior, valids, num_invalids)
         if not torch.isfinite(kl_prior):
             kl_prior = torch.zeros(kl_prior.shape)
         kl_prior = torch.clamp(kl_prior, max=30)
@@ -565,6 +575,25 @@ class Learner(Configurable):
 
         mb = buffer[indices]
         return mb
+
+    @staticmethod
+    def _normalize_adv_per_group(
+        adv: Tensor, groups: Tensor, valids: Tensor, num_invalids: int, num_groups: int
+    ) -> Tuple[Tensor, Tensor]:
+        """
+        Normalizes advantages with the mean and (unbiased) std of the valid samples of each group,
+        and returns per-sample loss weights 1/n_group for the valid samples (i.e. after masked_select).
+        """
+        g = masked_select(groups, valids, num_invalids)
+        a = masked_select(adv, valids, num_invalids)
+        counts = torch.zeros(num_groups, dtype=a.dtype, device=a.device).index_add_(0, g, torch.ones_like(a))
+        sums = torch.zeros(num_groups, dtype=a.dtype, device=a.device).index_add_(0, g, a)
+        means = sums / torch.clamp_min(counts, 1.0)
+        sq = torch.zeros(num_groups, dtype=a.dtype, device=a.device).index_add_(0, g, (a - means[g]).pow(2))
+        stds = torch.sqrt(sq / torch.clamp_min(counts - 1.0, 1.0))
+        adv = (adv - means[groups]) / torch.clamp_min(stds[groups], 1e-7)
+        loss_weights = 1.0 / counts[g]
+        return adv, loss_weights
 
     def _calculate_losses(
         self, mb: AttrDict, num_invalids: int
@@ -685,8 +714,17 @@ class Learner(Configurable):
                 adv = mb.advantages
                 targets = mb.returns
 
-            adv_std, adv_mean = torch.std_mean(masked_select(adv, valids, num_invalids))
-            adv = (adv - adv_mean) / torch.clamp_min(adv_std, 1e-7)  # normalize advantage
+            groups: Optional[Tensor] = mb.get("groups", None)
+            if groups is None:
+                self._loss_weights = None
+                adv_std, adv_mean = torch.std_mean(masked_select(adv, valids, num_invalids))
+                adv = (adv - adv_mean) / torch.clamp_min(adv_std, 1e-7)  # normalize advantage
+            else:
+                assert not self.cfg.with_vtrace and not self.aux_models, "sample groups do not support V-trace and aux models"
+                adv_std, adv_mean = torch.std_mean(masked_select(adv, valids, num_invalids))  # for summaries only
+                adv, self._loss_weights = self._normalize_adv_per_group(
+                    adv, groups, valids, num_invalids, self.actor_critic.num_sample_groups
+                )
 
         with self.timing.add_time("losses"):
             # noinspection PyTypeChecker
@@ -788,7 +826,8 @@ class Learner(Configurable):
                     epoch_actor_losses[batch_num] = float(actor_loss)
 
                     high_loss = 30.0
-                    if torch.abs(loss) > high_loss:
+                    # with sample groups, the loss is a sum over groups
+                    if torch.abs(loss) / self.actor_critic.num_sample_groups > high_loss:
                         log.warning(
                             "High loss value: l:%.4f pl:%.4f vl:%.4f exp_l:%.4f kl_l:%.4f (recommended to adjust the --reward_scale parameter)",
                             to_scalar(loss),
@@ -830,7 +869,7 @@ class Learner(Configurable):
 
                     if self.cfg.max_grad_norm > 0.0:
                         with timing.add_time("clip"):
-                            torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.cfg.max_grad_norm)
+                            self.actor_critic.clip_grad_norm_(self.cfg.max_grad_norm)
 
                     curr_policy_version = self.train_step  # policy version before the weight update
 
@@ -1013,6 +1052,12 @@ class Learner(Configurable):
             if not self.actor_critic.training:
                 self.actor_critic.train()
 
+            # group (policy) index of each sample if the model holds several policies, see ActorCritic.sample_groups()
+            groups: Optional[Tensor] = self.actor_critic.sample_groups(buff["obs"])
+            if groups is not None:
+                # invalid samples (e.g. inactive agents) may carry arbitrary indices, keep them in range
+                buff["groups"] = groups.long().clamp(0, self.actor_critic.num_sample_groups - 1)
+
             buff["normalized_obs"] = self._prepare_and_normalize_obs(buff["obs"])
 
         # Generate aux rewards
@@ -1042,7 +1087,7 @@ class Learner(Configurable):
                 # rl_games PPO uses a similar approach, see:
                 # https://github.com/Denys88/rl_games/blob/7b5f9500ee65ae0832a7d8613b019c333ecd932c/rl_games/algos_torch/models.py#L51
                 denormalized_values = buff["values"].clone()  # need to clone since normalizer is in-place
-                self.actor_critic.returns_normalizer(denormalized_values, denormalize=True)
+                self.actor_critic.normalize_returns(denormalized_values, buff.get("groups", None), denormalize=True)
             else:
                 # values are not normalized in this case, so we can use them as is
                 denormalized_values = buff["values"]
@@ -1093,8 +1138,9 @@ class Learner(Configurable):
                 buff["valids"][:, :-1] &= ~buff["dones"]
 
             # remove next step obs, rnn_states, and values from the batch, we don't need them anymore
-            for key in ["normalized_obs", "rnn_states", "values", "valids"]:
-                buff[key] = buff[key][:, :-1]
+            for key in ["normalized_obs", "rnn_states", "values", "valids", "groups"]:
+                if key in buff:
+                    buff[key] = buff[key][:, :-1]
 
             dataset_size = buff["actions"].shape[0] * buff["actions"].shape[1]
             for d, k, v in iterate_recursively(buff):
@@ -1106,7 +1152,7 @@ class Learner(Configurable):
 
             # return normalization parameters are only used on the learner, no need to lock the mutex
             if self.cfg.normalize_returns:
-                self.actor_critic.returns_normalizer(buff["returns"])  # in-place
+                self.actor_critic.normalize_returns(buff["returns"], buff.get("groups", None))  # in-place
 
             num_invalids = dataset_size - buff["valids"].sum().item()
             if num_invalids > 0:

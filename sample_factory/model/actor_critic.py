@@ -98,6 +98,26 @@ class ActorCritic(nn.Module, Configurable):
     def normalize_obs(self, obs: Dict[str, Tensor]) -> Dict[str, Tensor]:
         return self.obs_normalizer(obs)
 
+    # Hooks for models that hold several independent policies (sample groups) in a single network.
+    # The learner then normalizes advantages, averages losses and clips gradients per group, so that
+    # each group is trained exactly as if it had its own learner. The defaults keep the standard behavior.
+
+    num_sample_groups: int = 1
+
+    def sample_groups(self, obs: TensorDict) -> Optional[Tensor]:
+        """
+        Group (policy) index of each sample, as a long tensor with the leading dimensions of obs
+        (e.g. (B, T+1) on the learner). None means that samples are not split into groups.
+        """
+        return None
+
+    def normalize_returns(self, x: Tensor, groups: Optional[Tensor], denormalize: bool = False) -> None:
+        """In-place (de)normalization of returns/values. groups has the leading dimensions of x, or is None."""
+        self.returns_normalizer(x, denormalize=denormalize)
+
+    def clip_grad_norm_(self, max_norm: float) -> None:
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm)
+
     def summaries(self) -> Dict:
         # Can add more summaries here, like weights statistics
         s = self.obs_normalizer.summaries()
